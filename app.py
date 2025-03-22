@@ -1,6 +1,5 @@
 import os
 import re
-import asyncio
 import requests
 import google.generativeai as genai
 from telegram import Update
@@ -50,11 +49,14 @@ def is_inappropriate(content):
     return any(keyword in content for keyword in INAPPROPRIATE_KEYWORDS)
 
 def format_response(response_text):
-    """Format the response text by making text inside ** ** bold."""
+    """Format the response text by making text inside ** ** bold and code blocks."""
     # Escape special characters to avoid HTML parsing errors
     response_text = html.escape(response_text)
     # Replace **text** with <b>text</b>
-    return re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", response_text)
+    response_text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", response_text)
+    # Format code blocks
+    response_text = re.sub(r"```(.*?)```", r"<pre><code>\1</code></pre>", response_text, flags=re.DOTALL)
+    return response_text
 
 def get_custom_response(user_message):
     """Check if the user message matches any custom response."""
@@ -156,36 +158,58 @@ def generate_paragraph_with_gemini(labels_with_scores):
 
 async def get_weather(city):
     """Get weather information for a city."""
+    if not OPENWEATHERMAP_API_KEY:
+        return "Weather API key is missing. Please check your configuration."
+
     url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHERMAP_API_KEY}&units=metric"
-    response = requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad status codes
         data = response.json()
+
+        # Check if the city was found
+        if data.get("cod") != 200:
+            return f"Sorry, I couldn't find the weather for {city}."
+
+        # Extract weather information
         temperature = data["main"]["temp"]
         weather_description = data["weather"][0]["description"]
         return f"The weather in {city} is {weather_description} with a temperature of {temperature}°C."
-    else:
-        return "Sorry, I couldn't fetch the weather."
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching weather data: {e}")
+        return "Sorry, I couldn't fetch the weather due to a network error."
+    except KeyError as e:
+        print(f"Error parsing weather data: {e}")
+        return "Sorry, I couldn't process the weather data."
 
 async def get_news():
     """Get the latest news headlines."""
+    if not NEWS_API_KEY:
+        return "News API key is missing. Please check your configuration."
+
     url = f"https://newsapi.org/v2/top-headlines?country=us&apiKey={NEWS_API_KEY}"
-    response = requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
         data = response.json()
         articles = data["articles"][:5]
         news_message = "Here are the latest headlines:\n" + "\n".join([article["title"] for article in articles])
         return news_message
-    else:
+    except Exception as e:
+        print(f"Error fetching news: {e}")
         return "Sorry, I couldn't fetch the news."
 
 async def translate_text(text, target_language):
     """Translate text to the target language."""
     url = f"https://api.mymemory.translated.net/get?q={text}&langpair=en|{target_language}"
-    response = requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
         translation_data = response.json()
         if translation_data.get("responseStatus") == 200:
             return translation_data["responseData"]["translatedText"]
+    except Exception as e:
+        print(f"Error translating text: {e}")
     return "Sorry, I couldn't translate that."
 
 async def send_response(update, context, text):
@@ -213,13 +237,19 @@ async def handle_message(update: Update, context: CallbackContext):
         await send_response(update, context, custom_response)
         return
 
-    # Check for custom commands (weather, news, etc.)
-    if user_message.lower().startswith("weather in"):
-        city = user_message[len("weather in"):].strip()
-        response = await get_weather(city)
-    elif user_message.lower() == "latest news":
+    # Check for weather-related queries
+    if re.search(r"\bweather\b", user_message, re.IGNORECASE):
+        city_match = re.search(r"\bweather in ([\w\s]+)", user_message, re.IGNORECASE)
+        if city_match:
+            city = city_match.group(1).strip()
+            response = await get_weather(city)
+        else:
+            response = "Please provide a valid city name."
+    # Check for news-related queries
+    elif re.search(r"\bnews\b", user_message, re.IGNORECASE):
         response = await get_news()
-    elif user_message.lower().startswith("translate"):
+    # Check for translation requests
+    elif re.search(r"\btranslate\b", user_message, re.IGNORECASE):
         parts = user_message.split(" to ")
         if len(parts) == 2:
             text = parts[0][len("translate"):].strip()
@@ -237,7 +267,7 @@ async def handle_message(update: Update, context: CallbackContext):
         except Exception as e:
             response = f"Error: {str(e)}"
 
-    # Format the response (bold text)
+    # Format the response (bold text and code blocks)
     formatted_response = format_response(response)
 
     # Send the response
