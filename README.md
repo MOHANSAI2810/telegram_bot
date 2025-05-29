@@ -43,8 +43,6 @@ A professional chatbot designed to:
 ⏱️ This project was completed in just **5 days** of dedicated effort.  
 I’m proud to have successfully deployed it using **Railway**! 🚀
 
-🙏 **Special thanks** to *DATASCIENCE NRIIT* for encouraging and supporting this project.
-
 ---
 
 > 💬 “Great things never come from comfort zones. Keep building!” 💪
